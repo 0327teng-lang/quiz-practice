@@ -16,8 +16,10 @@ main{max-width:680px;margin:0 auto;padding:16px}
 .card h2{font-size:1.05rem;margin:0 0 6px}
 .meta{color:#666;font-size:.9rem}
 .btn{display:inline-block;border:none;border-radius:10px;padding:10px 16px;font-size:1rem;background:#3b6fd8;color:#fff;cursor:pointer;margin:4px 4px 4px 0;text-decoration:none}
+.btn:disabled{background:#aab8d8;cursor:default}
 .btn.ghost{background:#e8eefc;color:#3b6fd8}
 .opt{display:block;width:100%;text-align:left;background:#fff;border:2px solid #d5dbe7;border-radius:12px;padding:12px 14px;margin:8px 0;font-size:1rem;cursor:pointer;font-family:inherit}
+.opt.picked{border-color:#3b6fd8;background:#e8eefc}
 .opt.correct{border-color:#2e9e5b;background:#e9f8ef}
 .opt.wrong{border-color:#d64545;background:#fdecec}
 .opt:disabled{cursor:default}
@@ -42,12 +44,19 @@ const KEY = 'quiz_store_v1';
 const L = 'ABCDEFGH';
 let exams = [];
 const cache = {};
+let picked = [], pickedQi = null;   // 多選題暫存的選項
 
 function esc(s){return String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function loadStore(){try{return JSON.parse(localStorage.getItem(KEY))||{};}catch(e){return {};}}
 function saveStore(st){localStorage.setItem(KEY, JSON.stringify(st));}
-function ansIdx(q){return L.indexOf(String(q.answer).trim().toUpperCase());}
+function ansSet(q){return [...new Set(String(q.answer).toUpperCase().split('').map(c=>L.indexOf(c)).filter(i=>i>=0))].sort((a,b)=>a-b);}
+function toArr(v){return v===undefined ? [] : (Array.isArray(v) ? v : [v]);}
+function sameSet(a,b){
+  const x=[...a].sort((p,q)=>p-q), y=[...b].sort((p,q)=>p-q);
+  return x.length===y.length && x.every((v,i)=>v===y[i]);
+}
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function imgHTML(q){return q.image?`<img class="q-img" src="${esc(q.image)}" alt="題目圖片" loading="lazy" onclick="window.open(this.src)">`:'';}
 function go(h){location.hash = h;}
 
 async function init(){
@@ -159,7 +168,7 @@ function startRound(id, indices, label, shuf){
   route();
 }
 
-/* ---------- 作答畫面（每題作答後顯示答案與解析） ---------- */
+/* ---------- 作答畫面（單選／多選，作答後顯示答案與解析） ---------- */
 function renderQuestion(exam, p, justAnswered){
   const st = loadStore(), s = st[exam.id];
   const eid = encodeURIComponent(exam.id);
@@ -168,39 +177,59 @@ function renderQuestion(exam, p, justAnswered){
 
   const total = s.indices.length;
   const qi = s.indices[p], q = exam.questions[qi];
-  const chosen = s.answers[qi], answered = chosen !== undefined, ai = ansIdx(q);
+  const correct = ansSet(q), multi = correct.length > 1;
+  const answered = s.answers[qi] !== undefined, chosen = toArr(s.answers[qi]);
+  const right = answered && sameSet(chosen, correct);
+  if(pickedQi !== qi){ picked = []; pickedQi = qi; }
 
   const opts = q.options.map((o,i) => {
     let cls = '';
-    if(answered){ if(i === ai) cls = 'correct'; else if(i === chosen) cls = 'wrong'; }
+    if(answered){ if(correct.includes(i)) cls = 'correct'; else if(chosen.includes(i)) cls = 'wrong'; }
+    else if(picked.includes(i)) cls = 'picked';
     return `<button class="opt ${cls}" data-i="${i}" ${answered?'disabled':''}>${L[i]}. ${esc(o)}</button>`;
   }).join('');
 
-  const expl = answered ? `<div class="explain"><b>${chosen===ai?'✅ 答對了！':'❌ 答錯了'}　正確答案：${L[ai]}</b>\n\n${esc(q.explanation||'（本題暫無解析）')}</div>` : '';
+  const submitArea = (!answered && multi)
+    ? `<button class="btn" id="submitMulti" ${picked.length?'':'disabled'}>送出答案（已選 ${picked.length} 項）</button>
+       <p class="meta">多選題：請點選所有正確選項，選好後按「送出答案」。</p>`
+    : '';
+  const expl = answered ? `<div class="explain"><b>${right?'✅ 答對了！':'❌ 答錯了'}　正確答案：${correct.map(i=>L[i]).join('、')}</b>\n\n${esc(q.explanation||'（本題暫無解析）')}</div>` : '';
   const prev = p > 0 ? `<a class="btn ghost" href="#/exam/${eid}/q/${p-1}">← 上一題</a>` : '';
   const nextHref = p < total-1 ? `#/exam/${eid}/q/${p+1}` : `#/exam/${eid}/result`;
   const next = answered
     ? `<a class="btn" href="${nextHref}">${p<total-1?'下一題 →':'看成績 🎉'}</a>`
-    : `<span class="meta">請先選擇答案</span>`;
+    : `<span class="meta">${multi?'':'請先選擇答案'}</span>`;
 
   app.innerHTML = `
     <div class="card">
-      <div class="meta">${esc(s.label)}・第 ${p+1} / ${total} 題（原題號 ${qi+1}）</div>
+      <div class="meta">${esc(s.label)}・第 ${p+1} / ${total} 題（原題號 ${qi+1}）${multi?'・多選題':''}</div>
       <div class="bar"><div style="width:${((p+1)/total*100).toFixed(0)}%"></div></div>
       <div class="q-text">${esc(q.question)}</div>
-      ${q.image?`<img class="q-img" src="${esc(q.image)}" alt="題目圖片">`:''}
+      ${imgHTML(q)}
       <div>${opts}</div>
+      ${submitArea}
       ${expl}
       <div style="margin-top:12px">${prev}${next}</div>
     </div>
     <p><a href="#/exam/${eid}">← 回本卷首頁</a></p>`;
 
   app.querySelectorAll('.opt').forEach(b => b.onclick = () => {
-    st[exam.id].answers[qi] = +b.dataset.i;
-    saveStore(st);
-    renderQuestion(exam, p, true);
+    const i = +b.dataset.i;
+    if(!multi){ saveAnswer(exam, qi, p, [i]); return; }
+    picked = picked.includes(i) ? picked.filter(x => x !== i) : [...picked, i].sort((x,y)=>x-y);
+    renderQuestion(exam, p, false);
   });
+  const sub = document.getElementById('submitMulti');
+  if(sub) sub.onclick = () => saveAnswer(exam, qi, p, [...picked]);
   if(justAnswered) document.querySelector('.explain')?.scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function saveAnswer(exam, qi, p, sel){
+  const st = loadStore();
+  st[exam.id].answers[qi] = [...sel].sort((x,y)=>x-y);
+  saveStore(st);
+  picked = [];
+  renderQuestion(exam, p, true);
 }
 
 /* ---------- 成績與錯題檢討 ---------- */
@@ -217,7 +246,7 @@ function renderResult(exam){
     return;
   }
 
-  const wrong = s.indices.filter(i => s.answers[i] !== ansIdx(exam.questions[i]));
+  const wrong = s.indices.filter(i => !sameSet(toArr(s.answers[i]), ansSet(exam.questions[i])));
   const score = total - wrong.length, pct = Math.round(score/total*100);
   s.done = true; s.score = score; s.total = total;
   saveStore(st);
@@ -225,17 +254,17 @@ function renderResult(exam){
   const msg = pct>=90 ? '太厲害了！🎉' : pct>=70 ? '表現不錯，再複習錯題！💪' : pct>=50 ? '還可以，多練習錯題就能進步！' : '別灰心，看看解析再來一次！🔥';
 
   const wrongHTML = wrong.length ? wrong.map(qi => {
-    const q = exam.questions[qi], ai = ansIdx(q), ch = s.answers[qi];
+    const q = exam.questions[qi], cor = ansSet(q), ch = toArr(s.answers[qi]);
     const opts = q.options.map((o,i) => {
-      const cls = i === ai ? 'correct' : (i === ch ? 'wrong' : '');
-      return `<div class="opt ${cls}">${L[i]}. ${esc(o)}${i===ch && i!==ai ? '　← 你的答案' : ''}</div>`;
+      const cls = cor.includes(i) ? 'correct' : (ch.includes(i) ? 'wrong' : '');
+      return `<div class="opt ${cls}">${L[i]}. ${esc(o)}${(ch.includes(i) && !cor.includes(i)) ? '　← 你的答案' : ''}</div>`;
     }).join('');
     return `<div class="card wrong-item">
-      <div class="meta">第 ${qi+1} 題</div>
+      <div class="meta">第 ${qi+1} 題${cor.length>1?'（多選題）':''}</div>
       <div class="q-text">${esc(q.question)}</div>
-      ${q.image?`<img class="q-img" src="${esc(q.image)}" alt="題目圖片">`:''}
+      ${imgHTML(q)}
       ${opts}
-      <div class="explain"><b>正確答案：${L[ai]}</b>\n\n${esc(q.explanation||'（本題暫無解析）')}</div>
+      <div class="explain"><b>正確答案：${cor.map(i=>L[i]).join('、')}</b>\n\n${esc(q.explanation||'（本題暫無解析）')}</div>
     </div>`;
   }).join('') : '<div class="card">🎉 全部答對，沒有錯題！</div>';
 
