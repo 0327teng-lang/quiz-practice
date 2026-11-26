@@ -1,10 +1,10 @@
 [
   {
-    "id": "sample-math-001",
-    "title": "範例考卷：數學基礎練習",
-    "subject": "數學",
-    "year": 2025,
-    "file": "範例考卷_數學.json",
-    "count": 3
+    "id": "115-chem-sim-01",
+    "title": "115 學測模擬試卷 化學考科（選擇題）",
+    "subject": "化學",
+    "year": 2026,
+    "file": "115學測模擬_化學.json",
+    "count": 21
   }
 ]
