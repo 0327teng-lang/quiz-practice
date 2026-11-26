@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>刷題系統</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;background:#f3f6fb;color:#222;line-height:1.7}
+a{color:#3b6fd8}
+header{background:#3b6fd8;color:#fff;padding:14px 16px;position:sticky;top:0;z-index:10}
+header h1{margin:0;font-size:1.2rem}
+header a{color:#fff;text-decoration:none}
+main{max-width:680px;margin:0 auto;padding:16px}
+.card{background:#fff;border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 2px 6px rgba(0,0,0,.06)}
+.card h2{font-size:1.05rem;margin:0 0 6px}
+.meta{color:#666;font-size:.9rem}
+.btn{display:inline-block;border:none;border-radius:10px;padding:10px 16px;font-size:1rem;background:#3b6fd8;color:#fff;cursor:pointer;margin:4px 4px 4px 0;text-decoration:none}
+.btn.ghost{background:#e8eefc;color:#3b6fd8}
+.opt{display:block;width:100%;text-align:left;background:#fff;border:2px solid #d5dbe7;border-radius:12px;padding:12px 14px;margin:8px 0;font-size:1rem;cursor:pointer;font-family:inherit}
+.opt.correct{border-color:#2e9e5b;background:#e9f8ef}
+.opt.wrong{border-color:#d64545;background:#fdecec}
+.opt:disabled{cursor:default}
+.q-text{white-space:pre-wrap;font-size:1.05rem;margin:10px 0;font-weight:600}
+.explain{background:#fff8e1;border-left:4px solid #f0b400;padding:12px;border-radius:8px;margin-top:12px;white-space:pre-wrap}
+.bar{height:8px;background:#dde3f0;border-radius:6px;overflow:hidden;margin:8px 0}
+.bar div{height:100%;background:#3b6fd8;transition:width .3s}
+.tag{display:inline-block;background:#e8eefc;color:#3b6fd8;border-radius:6px;padding:2px 8px;font-size:.8rem;margin:2px 6px 2px 0}
+.score{font-size:2.4rem;font-weight:bold;text-align:center;color:#3b6fd8}
+.wrong-item{border-left:4px solid #d64545}
+img.q-img{max-width:100%;border-radius:8px;margin:8px 0}
+select{padding:8px;border-radius:8px;border:1px solid #ccc;font-size:1rem}
+</style>
+</head>
+<body>
+<header><a href="#/"><h1>📚 刷題系統</h1></a></header>
+<main id="app">載入中…</main>
+
+<script>
+const app = document.getElementById('app');
+const KEY = 'quiz_store_v1';
+const L = 'ABCDEFGH';
+let exams = [];
+const cache = {};
+
+function esc(s){return String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function loadStore(){try{return JSON.parse(localStorage.getItem(KEY))||{};}catch(e){return {};}}
+function saveStore(st){localStorage.setItem(KEY, JSON.stringify(st));}
+function ansIdx(q){return L.indexOf(String(q.answer).trim().toUpperCase());}
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function go(h){location.hash = h;}
+
+async function init(){
+  try{
+    const r = await fetch('exams/index.json?t=' + Date.now());
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    exams = await r.json();
+    Object.keys(cache).forEach(k => delete cache[k]);
+  }catch(e){
+    app.innerHTML = '<div class="card">無法載入考卷清單（exams/index.json），請確認檔案已上傳。</div>';
+    return;
+  }
+  route();
+}
+window.addEventListener('hashchange', route);
+
+async function getExam(id){
+  if(!cache[id]){
+    const meta = exams.find(e => e.id === id);
+    if(!meta) throw new Error('找不到此考卷');
+    const r = await fetch('exams/' + meta.file + '?t=' + Date.now());
+    cache[id] = await r.json();
+  }
+  return cache[id];
+}
+
+async function route(){
+  const parts = location.hash.replace(/^#\/?/,'').split('/').filter(Boolean).map(decodeURIComponent);
+  try{
+    if(parts[0] !== 'exam') return renderHome();
+    const exam = await getExam(parts[1]);
+    if(parts[2] === 'q') return renderQuestion(exam, +parts[3]);
+    if(parts[2] === 'result') return renderResult(exam);
+    return renderIntro(exam);
+  }catch(e){
+    app.innerHTML = `<div class="card">載入失敗：${esc(e.message)}<br><a href="#/">回首頁</a></div>`;
+  }
+}
+
+/* ---------- 首頁：考卷列表 ---------- */
+function renderHome(){
+  const st = loadStore();
+  const subs = [...new Set(exams.map(e => e.subject).filter(Boolean))];
+  app.innerHTML = `
+    <div class="card">
+      <label>科目：<select id="subj"><option value="">全部</option>${subs.map(s=>`<option>${esc(s)}</option>`).join('')}</select></label>
+      <button class="btn ghost" id="reload">🔄 重新載入考卷</button>
+    </div>
+    <div id="list"></div>`;
+  const draw = () => {
+    const sel = document.getElementById('subj').value;
+    const list = exams.filter(e => !sel || e.subject === sel).sort((a,b)=>(b.year||0)-(a.year||0));
+    document.getElementById('list').innerHTML = list.length ? list.map(e => {
+      const s = st[e.id]; let status = '';
+      if(s && s.done) status = `<span class="tag">上次 ${s.score}/${s.total}</span>`;
+      else if(s && s.indices) status = `<span class="tag">作答中 ${Object.keys(s.answers).length}/${s.indices.length}</span>`;
+      return `<div class="card">
+        <h2>${esc(e.title)}</h2>
+        <div class="meta"><span class="tag">${esc(e.subject||'')}</span>${e.year?`<span class="tag">${esc(e.year)} 年</span>`:''}共 ${esc(e.count||'?')} 題 ${status}</div>
+        <a class="btn" href="#/exam/${encodeURIComponent(e.id)}">進入作答</a>
+      </div>`;
+    }).join('') : '<div class="card">目前沒有符合的考卷</div>';
+  };
+  draw();
+  document.getElementById('subj').onchange = draw;
+  document.getElementById('reload').onclick = () => init();
+}
+
+/* ---------- 考卷首頁 ---------- */
+function renderIntro(exam){
+  const st = loadStore(), s = st[exam.id], n = exam.questions.length;
+  const eid = encodeURIComponent(exam.id);
+  const all = exam.questions.map((_,i)=>i);
+  let info = '', btns = '';
+  if(s && s.indices && !s.done){
+    const a = Object.keys(s.answers).length;
+    const p = s.indices.findIndex(i => s.answers[i] === undefined);
+    info = `目前進度：${a}/${s.indices.length}（${esc(s.label)}）`;
+    btns = `<a class="btn" href="#/exam/${eid}/q/${p}">繼續作答</a>`;
+  }else if(s && s.done){
+    info = `上次成績：${s.score}/${s.total}`;
+    btns = `<a class="btn" href="#/exam/${eid}/result">查看成績與錯題</a>`;
+  }
+  const newText = (s && s.indices) ? (s.done ? '重新全卷作答' : '從頭重新開始') : '開始作答';
+  btns += `<button class="btn ghost" id="newRound">${newText}</button>`;
+
+  app.innerHTML = `
+    <div class="card">
+      <h2>${esc(exam.title)}</h2>
+      <div class="meta">${esc(exam.subject||'')} ${exam.year?esc(exam.year)+' 年':''}・共 ${n} 題</div>
+      ${exam.description?`<p>${esc(exam.description)}</p>`:''}
+      <p class="meta">${info}</p>
+      <label><input type="checkbox" id="shuf"> 隨機順序作答</label><br><br>
+      ${btns}
+      <p><a href="#/">← 回考卷列表</a></p>
+    </div>`;
+
+  document.getElementById('newRound').onclick = () => {
+    if(s && s.indices && !s.done && !confirm('重新開始會清除目前的作答進度，確定嗎？')) return;
+    startRound(exam.id, all, '全卷', document.getElementById('shuf').checked);
+  };
+}
+
+function startRound(id, indices, label, shuf){
+  const st = loadStore();
+  st[id] = { indices: shuf ? shuffle([...indices]) : [...indices], answers: {}, done: false, label };
+  saveStore(st);
+  go(`#/exam/${encodeURIComponent(id)}/q/0`);
+  route();
+}
+
+/* ---------- 作答畫面（每題作答後顯示答案與解析） ---------- */
+function renderQuestion(exam, p, justAnswered){
+  const st = loadStore(), s = st[exam.id];
+  const eid = encodeURIComponent(exam.id);
+  if(!s || !s.indices) return go(`#/exam/${eid}`);
+  if(s.done || isNaN(p) || p < 0 || p >= s.indices.length) return go(`#/exam/${eid}/result`);
+
+  const total = s.indices.length;
+  const qi = s.indices[p], q = exam.questions[qi];
+  const chosen = s.answers[qi], answered = chosen !== undefined, ai = ansIdx(q);
+
+  const opts = q.options.map((o,i) => {
+    let cls = '';
+    if(answered){ if(i === ai) cls = 'correct'; else if(i === chosen) cls = 'wrong'; }
+    return `<button class="opt ${cls}" data-i="${i}" ${answered?'disabled':''}>${L[i]}. ${esc(o)}</button>`;
+  }).join('');
+
+  const expl = answered ? `<div class="explain"><b>${chosen===ai?'✅ 答對了！':'❌ 答錯了'}　正確答案：${L[ai]}</b>\n\n${esc(q.explanation||'（本題暫無解析）')}</div>` : '';
+  const prev = p > 0 ? `<a class="btn ghost" href="#/exam/${eid}/q/${p-1}">← 上一題</a>` : '';
+  const nextHref = p < total-1 ? `#/exam/${eid}/q/${p+1}` : `#/exam/${eid}/result`;
+  const next = answered
+    ? `<a class="btn" href="${nextHref}">${p<total-1?'下一題 →':'看成績 🎉'}</a>`
+    : `<span class="meta">請先選擇答案</span>`;
+
+  app.innerHTML = `
+    <div class="card">
+      <div class="meta">${esc(s.label)}・第 ${p+1} / ${total} 題（原題號 ${qi+1}）</div>
+      <div class="bar"><div style="width:${((p+1)/total*100).toFixed(0)}%"></div></div>
+      <div class="q-text">${esc(q.question)}</div>
+      ${q.image?`<img class="q-img" src="${esc(q.image)}" alt="題目圖片">`:''}
+      <div>${opts}</div>
+      ${expl}
+      <div style="margin-top:12px">${prev}${next}</div>
+    </div>
+    <p><a href="#/exam/${eid}">← 回本卷首頁</a></p>`;
+
+  app.querySelectorAll('.opt').forEach(b => b.onclick = () => {
+    st[exam.id].answers[qi] = +b.dataset.i;
+    saveStore(st);
+    renderQuestion(exam, p, true);
+  });
+  if(justAnswered) document.querySelector('.explain')?.scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+/* ---------- 成績與錯題檢討 ---------- */
+function renderResult(exam){
+  const st = loadStore(), s = st[exam.id];
+  const eid = encodeURIComponent(exam.id);
+  if(!s || !s.indices) return go(`#/exam/${eid}`);
+
+  const total = s.indices.length;
+  const doneCount = s.indices.filter(i => s.answers[i] !== undefined).length;
+  if(doneCount < total){
+    const p = s.indices.findIndex(i => s.answers[i] === undefined);
+    app.innerHTML = `<div class="card"><h2>還有 ${total-doneCount} 題未作答</h2><a class="btn" href="#/exam/${eid}/q/${p}">繼續作答</a></div>`;
+    return;
+  }
+
+  const wrong = s.indices.filter(i => s.answers[i] !== ansIdx(exam.questions[i]));
+  const score = total - wrong.length, pct = Math.round(score/total*100);
+  s.done = true; s.score = score; s.total = total;
+  saveStore(st);
+
+  const msg = pct>=90 ? '太厲害了！🎉' : pct>=70 ? '表現不錯，再複習錯題！💪' : pct>=50 ? '還可以，多練習錯題就能進步！' : '別灰心，看看解析再來一次！🔥';
+
+  const wrongHTML = wrong.length ? wrong.map(qi => {
+    const q = exam.questions[qi], ai = ansIdx(q), ch = s.answers[qi];
+    const opts = q.options.map((o,i) => {
+      const cls = i === ai ? 'correct' : (i === ch ? 'wrong' : '');
+      return `<div class="opt ${cls}">${L[i]}. ${esc(o)}${i===ch && i!==ai ? '　← 你的答案' : ''}</div>`;
+    }).join('');
+    return `<div class="card wrong-item">
+      <div class="meta">第 ${qi+1} 題</div>
+      <div class="q-text">${esc(q.question)}</div>
+      ${q.image?`<img class="q-img" src="${esc(q.image)}" alt="題目圖片">`:''}
+      ${opts}
+      <div class="explain"><b>正確答案：${L[ai]}</b>\n\n${esc(q.explanation||'（本題暫無解析）')}</div>
+    </div>`;
+  }).join('') : '<div class="card">🎉 全部答對，沒有錯題！</div>';
+
+  app.innerHTML = `
+    <div class="card" style="text-align:center">
+      <div class="meta">${esc(exam.title)}・${esc(s.label)}</div>
+      <div class="score">${score} / ${total}</div>
+      <div class="meta">正確率 ${pct}%・錯 ${wrong.length} 題</div>
+      <p>${msg}</p>
+      ${wrong.length ? `<button class="btn" id="wrongOnly">只練錯題（${wrong.length} 題）</button>` : ''}
+      <button class="btn ghost" id="allAgain">重新全卷作答</button>
+      <a class="btn ghost" href="#/">回首頁</a>
+    </div>
+    <h3>❌ 錯題檢討（${wrong.length} 題）</h3>
+    ${wrongHTML}`;
+
+  const wo = document.getElementById('wrongOnly');
+  if(wo) wo.onclick = () => startRound(exam.id, wrong, '錯題重練', false);
+  document.getElementById('allAgain').onclick = () =>
+    startRound(exam.id, exam.questions.map((_,i)=>i), '全卷', false);
+}
+
+init();
+</script>
+</body>
+</html>
